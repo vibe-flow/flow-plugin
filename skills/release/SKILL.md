@@ -1,119 +1,158 @@
 ---
 name: release
-description: Show diff between dev and prod branches, merge to prod and deploy
+description: Release tag-based — bump la version, crée un tag vX.Y.Z, push pour déclencher le déploiement prod
+argument-hint: "[patch|minor|major]"
 disable-model-invocation: true
 ---
 
 # Release
 
-Affiche le delta entre les branches dev et prod, propose de merger et déployer en production.
+Crée une nouvelle release sémantique de production. Le workflow Kamal en CI se déclenche sur push de tag `v*`.
 
-## Step 0: Detect branches
+> **Modèle trunk-based** : pas de branche `develop`. `main` est la seule branche longue.
+> Une release = un commit `chore(release): vX.Y.Z` qui bump la version + un tag `vX.Y.Z`.
 
-1. Chercher `deploy.json` à la racine du projet
-2. **Si `deploy.json` existe avec `environments`** :
-   - Extraire la branche prod : celle où `env_name` contient "prod" ou est la dernière listée
-   - Extraire la branche dev : celle où `env_name` contient "test"/"dev"/"staging" ou est la première listée
-   - Afficher : "Branches détectées : dev=`{dev_branch}`, prod=`{prod_branch}`"
-3. **Sinon, détecter par convention** :
-   - Prod : vérifier si `main` existe, sinon `master`
-   - Dev : vérifier si `develop` existe, sinon `dev`
-   - Proposer de créer `deploy.json` avec ces valeurs via `AskUserQuestion`
+## Dynamic context
 
-## Step 1: Show delta
+- Branche courante : !`git branch --show-current`
+- Working tree clean : !`git status --porcelain | wc -l | tr -d ' '` (0 = clean)
+- Dernier tag : !`git describe --tags --abbrev=0 2>/dev/null || echo "aucun tag"`
+- Commits depuis dernier tag : !`git log $(git describe --tags --abbrev=0 2>/dev/null)..HEAD --oneline 2>/dev/null | wc -l | tr -d ' '`
+- Version package.json : !`grep -o '"version": *"[^"]*"' package.json 2>/dev/null | head -1 | cut -d'"' -f4 || echo "N/A"`
 
-1. Fetch les dernières modifications :
+## Step 0 : Pré-requis
+
+Vérifier dans l'ordre :
+
+1. **Branche `main`** : si on n'est pas sur `main`, demander à l'utilisateur via `AskUserQuestion` :
+   - Checkout main et continuer
+   - Annuler
+2. **Working tree clean** : si des changements non-commités, demander :
+   - Stash, release, unstash
+   - Annuler (l'utilisateur commit/stash lui-même)
+3. **À jour avec origin** : `git fetch origin && git status -sb`
+   - Si en retard : `git pull --ff-only origin main`
+   - Si en avance : OK, le push poussera tout
+4. **`package.json` existe avec une `"version"` valide** : sinon, demander à l'utilisateur la version courante via `AskUserQuestion`.
+
+## Step 1 : Afficher le delta depuis le dernier tag
+
+```bash
+LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+if [ -n "$LAST_TAG" ]; then
+  git log $LAST_TAG..HEAD --oneline
+  git diff $LAST_TAG..HEAD --stat
+else
+  git log --oneline -20
+fi
+```
+
+Présenter un résumé clair :
+```
+Release — delta depuis ${LAST_TAG:-début}
+─────────────────────────────────────────
+Commits :  N
+Fichiers : M
+
+Commits inclus :
+  abc1234 feat(xxx): ...
+  def5678 fix(yyy): ...
+  ...
+```
+
+## Step 2 : Choisir le type de bump
+
+Si `$ARGUMENTS` contient `patch`, `minor` ou `major` → l'utiliser directement.
+
+Sinon, demander via `AskUserQuestion` (4 options, recommander en fonction du delta) :
+- **patch** (vX.Y.Z+1) — corrections de bugs, aucun changement d'API. *Recommandé si les commits sont majoritairement `fix:` ou `chore:`*.
+- **minor** (vX.Y+1.0) — nouvelles fonctionnalités, rétro-compatible. *Recommandé si présence de `feat:`*.
+- **major** (vX+1.0.0) — breaking changes. *Recommandé si présence de `feat!:` ou `BREAKING CHANGE:`*.
+- **Annuler**
+
+Calculer la nouvelle version à partir de la version courante de `package.json` :
+```bash
+CURRENT=$(grep -o '"version": *"[^"]*"' package.json | head -1 | cut -d'"' -f4)
+# Parser X.Y.Z et bumper selon le choix
+```
+
+## Step 3 : Confirmer et exécuter
+
+Afficher le résumé final via `AskUserQuestion` :
+```
+Release v{NEW_VERSION}
+──────────────────────
+Bump :       {CURRENT} → {NEW_VERSION} ({type})
+Commits :    {N} depuis {LAST_TAG}
+Workflow :   .github/workflows/deploy.yml sera déclenché par le tag
+
+Confirmer la release ?
+```
+
+Si confirmé, dans cet ordre :
+
+1. **Update `package.json`** (racine, monorepo Bun compatible) :
    ```bash
-   git fetch origin
+   # Cibler uniquement le package.json racine (pas les workspaces)
+   sed -i.bak 's/"version": *"[^"]*"/"version": "{NEW_VERSION}"/' package.json && rm package.json.bak
    ```
-2. Afficher le nombre de commits en avance :
+2. **Commit** :
    ```bash
-   git rev-list --count origin/{prod_branch}..origin/{dev_branch}
+   git add package.json
+   git commit -m "chore(release): v{NEW_VERSION}"
    ```
-3. Afficher la liste des commits :
+3. **Créer le tag annoté** :
    ```bash
-   git log origin/{prod_branch}..origin/{dev_branch} --oneline
+   git tag -a v{NEW_VERSION} -m "Release v{NEW_VERSION}
+
+   {liste courte des commits inclus}"
    ```
-4. Afficher un résumé des fichiers modifiés :
+4. **Push commit ET tag** :
    ```bash
-   git diff origin/{prod_branch}..origin/{dev_branch} --stat
-   ```
-5. Présenter un résumé clair :
-   ```
-   Release Summary
-   ---------------
-   From:     {dev_branch}
-   To:       {prod_branch}
-   Commits:  {N} commits
-   Files:    {M} files changed
-
-   Commits to merge:
-   - abc1234 feat(xxx): ...
-   - def5678 fix(yyy): ...
+   git push origin main
+   git push origin v{NEW_VERSION}
    ```
 
-## Step 2: Confirm merge
+## Step 4 : Monitor le workflow de déploiement
 
-1. Demander via `AskUserQuestion` :
-   - "Merger ces {N} commits vers prod ?"
-   - Options : "Oui, merger et déployer", "Non, annuler"
-2. Si "Non" : s'arrêter et revenir à la branche d'origine
+```bash
+gh run list --workflow=deploy.yml --limit=3
+```
 
-## Step 3: Merge to prod
+Trouver le run déclenché par le tag (`event` est `push` et `headBranch` contient `v{NEW_VERSION}`) et le suivre :
+```bash
+gh run watch <run-id>
+```
 
-1. Vérifier que le working directory est propre
-2. Checkout et pull la branche prod :
-   ```bash
-   git checkout {prod_branch}
-   git pull origin {prod_branch}
-   ```
-3. Merger la branche dev :
-   ```bash
-   git merge origin/{dev_branch} --no-edit
-   ```
-4. **Si conflit** :
-   - Afficher les fichiers en conflit
-   - Demander : "Résoudre manuellement, ou annuler ?"
-   - Si annuler : `git merge --abort` et revenir à la branche d'origine
-5. **Si succès** :
-   - Push vers prod :
-     ```bash
-     git push origin {prod_branch}
-     ```
+Si succès : afficher le résumé final.
+Si échec :
+- `gh run view <run-id> --log-failed`
+- Proposer `/hotfix` si fix rapide nécessaire, ou rollback via `kamal rollback`.
 
-## Step 4: Monitor deployment
+## Step 5 : Résumé final
 
-1. Surveiller le workflow GitHub Actions :
-   ```bash
-   gh run list --workflow=<deploy-workflow> --branch={prod_branch} --limit=1
-   gh run watch <run-id>
-   ```
-2. Si le workflow réussit, vérifier le serveur prod (via `deploy.json` si disponible) :
-   ```bash
-   curl -sf {health_check_url}
-   ```
+```
+Release v{NEW_VERSION} — terminée
+──────────────────────────────────
+Tag :         v{NEW_VERSION}
+Commits :     {N}
+Workflow :    {passed/failed}
+URL :         https://github.com/{owner}/{repo}/releases/tag/v{NEW_VERSION}
+Prod URL :    {depuis config/deploy.yml proxy.host, si disponible}
+```
 
-## Step 5: Return and summary
+Optionnel : proposer de créer une release GitHub avec auto-generated notes :
+```bash
+gh release create v{NEW_VERSION} --generate-notes
+```
 
-1. Revenir à la branche d'origine :
-   ```bash
-   git checkout {original_branch}
-   ```
-2. Afficher le résumé final :
-   ```
-   Release Complete
-   ----------------
-   Merged:      {dev_branch} → {prod_branch}
-   Commits:     {N} commits
-   Workflow:    {passed/failed}
-   Health:      {OK/FAIL}
-   Production:  {health_check_url}
-   ```
+## Règles importantes
 
-## Important notes
+- **TOUJOURS** confirmer avant de commit/tag/push (le push de tag est irréversible côté CI).
+- **NE JAMAIS** `--force` un push de tag.
+- Si l'utilisateur a `deploy.json` legacy avec `environments` (branches dev/prod) : signaler que le nouveau modèle est tag-based, mais respecter le setup existant si l'utilisateur insiste.
+- Si le projet n'a pas de `package.json` ou pas de `version` (genre repo de scripts) : demander une version manuelle via `AskUserQuestion`.
 
-- TOUJOURS afficher le delta avant de proposer le merge
-- TOUJOURS vérifier que dev est à jour avec origin avant de merger
-- TOUJOURS revenir à la branche d'origine à la fin
-- Ne JAMAIS forcer le push (`--force`)
-- Si le merge échoue, proposer d'annuler proprement
+## Arguments
+
+- `patch` | `minor` | `major` — skip Step 2, bump directement

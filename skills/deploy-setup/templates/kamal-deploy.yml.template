@@ -1,0 +1,71 @@
+# =============================================================================
+# Kamal config — généré par /deploy-setup, peut être édité manuellement ensuite.
+# Pattern vibe-stack : web container = front gateway (nginx + proxy_pass interne
+# vers l'API), API = accessory Kamal. kamal-proxy gère SSL + multi-host.
+# =============================================================================
+
+service: {SERVICE_NAME}
+image: {REGISTRY_ORG}/{SERVICE_NAME}-web
+
+servers:
+  web:
+    hosts:
+      - {SSH_HOST}
+    options:
+      network: {NETWORK}              # rejoint le réseau du server-infra
+
+# SSH user (sudo, pas root par défaut sur Debian)
+ssh:
+  user: {SSH_USER}
+
+# kamal-proxy : SSL Let's Encrypt + multi-host routing vers le container web
+proxy:
+  ssl: true
+  hosts:
+{HOSTS_YAML_LIST}
+  app_port: 80
+  healthcheck:
+    path: /health
+    interval: 5
+    timeout: 30
+
+registry:
+  server: ghcr.io
+  username: {GHCR_USERNAME}
+  password:
+    - KAMAL_REGISTRY_PASSWORD
+
+# Builder : overlay simple sur l'image existante (rapide, pas de re-build complet).
+# Le Dockerfile.web.kamal copie juste le nouveau nginx.conf par-dessus.
+builder:
+  arch: amd64
+  dockerfile: Dockerfile.web.kamal
+
+# API en accessory — accessible depuis le container web via Docker DNS (corseo-api:3000).
+# L'API doit être présente sur le réseau {NETWORK} pour atteindre server-postgres etc.
+accessories:
+  api:
+    image: {REGISTRY_ORG}/{SERVICE_NAME}-api:latest
+    host: {SSH_HOST}
+    options:
+      network: {NETWORK}
+      hostname: {SERVICE_NAME}-api
+    env:
+      clear:
+        NODE_ENV: production
+        PORT: "3000"
+        UPLOADS_DIR: /app/uploads
+        LOG_LEVEL: info
+        JWT_EXPIRES_IN: 15m
+        JWT_REFRESH_EXPIRES_IN: 7d
+        CORS_ORIGIN: https://{PRIMARY_HOST}
+        FRONTEND_URL: https://{PRIMARY_HOST}
+{EXTRA_CLEAR_ENV}
+      secret:
+        - DATABASE_URL
+        - REDIS_URL
+        - JWT_SECRET
+        - JWT_REFRESH_SECRET
+{EXTRA_SECRET_ENV}
+    volumes:
+      - {SERVICE_NAME}_uploads:/app/uploads
