@@ -1,9 +1,14 @@
 #!/usr/bin/env bun
 // @ts-nocheck -- script standalone execute par bun, pas type-check
-// Hook SessionStart: alloue des ports dev libres pour chaque projet/worktree Vibe Stack.
+// Hook SessionStart: alloue des ports dev libres pour chaque projet/worktree Vibe Stack
+// et bootstrap un .env local (gitignore) avec les defaults dev.
 //
-// Idempotent : si .env.local contient deja FRONTEND_PORT/BACKEND_PORT et qu'ils
-// sont toujours libres, on les conserve. Sinon on scanne a partir de 5173/3000.
+// Idempotent : si .env existe deja, on n'ecrase pas les valeurs deja definies.
+// Les defaults sont inline ici (plus besoin de .env.example versionne dans le repo).
+//
+// Convention : le repo ne contient jamais de .env* versionne. Les vrais secrets
+// vivent dans Bitwarden Secret Manager (BSM), pas ici. Ce hook genere uniquement
+// des valeurs de dev qui n'ont pas vocation a aller en prod.
 //
 // Detection projet : early exit si .flow/project.json absent (= pas un projet Vibe Stack).
 
@@ -16,12 +21,31 @@ import { randomBytes } from 'node:crypto'
 const PROJECT_ROOT = process.env.CLAUDE_PROJECT_DIR ?? process.cwd()
 const FLOW_MARKER = join(PROJECT_ROOT, '.flow/project.json')
 const ENV = join(PROJECT_ROOT, '.env')
-const ENV_EXAMPLE = join(PROJECT_ROOT, '.env.example')
 const ENV_LOCAL = join(PROJECT_ROOT, '.env.local')
 const LAUNCH_JSON = join(PROJECT_ROOT, '.claude/launch.json')
 
 const FRONTEND_DEFAULT = 5173
 const BACKEND_DEFAULT = 3000
+
+// Defaults dev pour generer .env localement. JWT secrets sont generes aleatoirement
+// par session via generateSecret(). Les autres valeurs ciblent les services exposes
+// par le repo local-services (Postgres, Redis, LiteLLM, MinIO, Mailpit sur localhost).
+const DEV_DEFAULTS: Record<string, string | (() => string)> = {
+  DATABASE_URL: '"postgresql://postgres:postgres@localhost:5432/app?schema=public"',
+  REDIS_URL: '"redis://localhost:6379"',
+  JWT_SECRET: () => `"${generateSecret()}"`,
+  JWT_EXPIRES_IN: '"15m"',
+  JWT_REFRESH_SECRET: () => `"${generateSecret()}"`,
+  JWT_REFRESH_EXPIRES_IN: '"7d"',
+  QUEUE_ENABLED: '"false"',
+  FRONTEND_PORT: '"5173"',
+  BACKEND_PORT: '"3000"',
+  MAIL_HOST: '"localhost"',
+  MAIL_PORT: '"1025"',
+  MAIL_FROM: '"noreply@myproject.localhost"',
+  FRONTEND_URL: '"http://localhost:5173"',
+  VITE_DEV_LOGIN: '"true"',
+}
 
 if (!existsSync(FLOW_MARKER)) {
   // Pas un projet Vibe Stack -> on ne touche a rien
@@ -106,33 +130,22 @@ function generateSecret(): string {
 }
 
 function bootstrapEnv(): void {
-  if (!existsSync(ENV_EXAMPLE)) return
-
-  // 1. Si .env n'existe pas, copier celui du repo principal s'il existe
+  // 1. Si .env n'existe pas dans le worktree, copier celui du repo principal s'il existe
+  // (permet aux worktrees de partager les overrides locaux du repo parent par defaut).
   if (!existsSync(ENV)) {
     const mainEnv = findMainRepoEnv()
     if (mainEnv) writeFileSync(ENV, readFileSync(mainEnv))
   }
 
-  // 2. Compléter avec les vars manquantes de .env.example
-  const exampleContent = readFileSync(ENV_EXAMPLE, 'utf-8')
+  // 2. Completer avec les defaults dev (DEV_DEFAULTS, inline ci-dessus).
+  // Aucune dependance a un fichier versionne dans le repo.
   const envContent = existsSync(ENV) ? readFileSync(ENV, 'utf-8') : ''
   const envVars = parseEnv(envContent)
 
   const additions: string[] = []
-  for (const line of exampleContent.split('\n')) {
-    // Match "KEY=value" ou "# KEY=value" (commentee)
-    const match = line.match(/^#?\s*([A-Z_][A-Z0-9_]*)=(.*)$/)
-    if (!match) continue
-    const [, key, rawValue] = match
-    if (envVars[key] !== undefined) continue // deja defini
-
-    let value: string
-    if (key === 'JWT_SECRET' || key === 'JWT_REFRESH_SECRET') {
-      value = `"${generateSecret()}"`
-    } else {
-      value = rawValue.trim()
-    }
+  for (const [key, defaultValue] of Object.entries(DEV_DEFAULTS)) {
+    if (envVars[key] !== undefined) continue // deja defini, on ne touche pas
+    const value = typeof defaultValue === 'function' ? defaultValue() : defaultValue
     additions.push(`${key}=${value}`)
   }
 
