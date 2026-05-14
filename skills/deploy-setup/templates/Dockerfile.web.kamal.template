@@ -1,0 +1,10 @@
+# =============================================================================
+# Overlay Dockerfile pour Kamal — re-use l'image web existante et swap nginx.conf
+# pour activer le routing path-based interne vers l'API accessory.
+#
+# Le build initial de l'image web reste via Dockerfile.web (full build). Cet
+# overlay est ce que Kamal build à chaque deploy (très rapide : juste un COPY).
+# =============================================================================
+
+FROM {REGISTRY_ORG}/{SERVICE_NAME}-web:latest
+COPY infrastructure/nginx/nginx.conf /etc/nginx/nginx.conf

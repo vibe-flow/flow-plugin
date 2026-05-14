@@ -1,0 +1,91 @@
+# =============================================================================
+# Deploy workflow — Kamal-based
+# Trigger:
+#   - push sur main → kamal deploy (rolling, version = commit hash)
+#   - tag v*        → kamal deploy (rolling, version = tag)
+# =============================================================================
+
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+# Prevent concurrent deploys of the same ref (Kamal's own deploy lock is a
+# secondary safety, but better to not even queue them).
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      # Kamal needs the registry password for both build (local) and pull (remote).
+      KAMAL_REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+      # App secrets — declare in repo Settings → Secrets and variables → Actions.
+      # Add/remove based on your config/deploy.yml accessory env.secret list.
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      REDIS_URL: ${{ secrets.REDIS_URL }}
+      JWT_SECRET: ${{ secrets.JWT_SECRET }}
+      JWT_REFRESH_SECRET: ${{ secrets.JWT_REFRESH_SECRET }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Kamal v2 builds from a local git clone — needs full history for the
+          # commit-hash-based image tagging.
+          fetch-depth: 0
+
+      - name: Set up SSH for Kamal
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          echo "${{ secrets.SSH_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+
+      - name: Login to GHCR (for image pull during build)
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Kamal deploy
+        run: |
+          docker run --rm \
+            -v "$(pwd):/workdir" \
+            -v "$HOME/.ssh:/root/.ssh" \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -e KAMAL_REGISTRY_PASSWORD \
+            -e DATABASE_URL \
+            -e REDIS_URL \
+            -e JWT_SECRET \
+            -e JWT_REFRESH_SECRET \
+            ghcr.io/basecamp/kamal:latest deploy
+
+      - name: Health check
+        if: success()
+        run: |
+          # Adjust to your primary domain from config/deploy.yml proxy.hosts[0]
+          PRIMARY_HOST="{PRIMARY_HOST}"
+          for i in 1 2 3 4 5; do
+            if curl -sf "https://$PRIMARY_HOST/health" >/dev/null; then
+              echo "Health check OK"
+              exit 0
+            fi
+            echo "Attempt $i failed, retrying in 5s..."
+            sleep 5
+          done
+          echo "Health check failed after 5 attempts"
+          exit 1
