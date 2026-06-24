@@ -9,7 +9,7 @@
       "name": "vibe-stack",
       "source": "./",
       "description": "Skills, commands and conventions for the vibe-stack monorepo ecosystem.",
-      "version": "0.4.0",
+      "version": "0.4.1",
       "category": "development",
       "keywords": ["vibe-stack", "bun", "nestjs", "react", "trpc"]
     }
