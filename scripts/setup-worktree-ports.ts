@@ -38,13 +38,15 @@ const DEV_DEFAULTS: Record<string, string | (() => string)> = {
   JWT_REFRESH_SECRET: () => `"${generateSecret()}"`,
   JWT_REFRESH_EXPIRES_IN: '"7d"',
   QUEUE_ENABLED: '"false"',
-  FRONTEND_PORT: '"5173"',
-  BACKEND_PORT: '"3000"',
   MAIL_HOST: '"localhost"',
   MAIL_PORT: '"1025"',
   MAIL_FROM: '"noreply@myproject.localhost"',
-  FRONTEND_URL: '"http://localhost:5173"',
   VITE_DEV_LOGIN: '"true"',
+  // NB: FRONTEND_PORT / BACKEND_PORT / FRONTEND_URL ne sont volontairement PAS ici.
+  // Ce sont des valeurs PAR-INSTANCE : elles sont assignees (ports libres) dans
+  // .env.local par la logique de ports plus bas, qui en est l'unique source. Les
+  // figer aussi dans .env casserait NestJS (ConfigModule : le .env l'emporte sur
+  // .env.local pour ces cles) -> l'API ecouterait sur le mauvais port.
 }
 
 if (!existsSync(FLOW_MARKER)) {
@@ -57,7 +59,10 @@ function isFree(port: number): Promise<boolean> {
     const server = createServer()
     server.once('error', () => resolve(false))
     server.once('listening', () => server.close(() => resolve(true)))
-    server.listen(port, '127.0.0.1')
+    // Ecouter sur TOUTES les interfaces (pas seulement 127.0.0.1) pour refleter la
+    // facon dont NestJS (app.listen) et Vite (host:true) bindent : sinon un service
+    // deja sur IPv6 `*:port` (ex. un autre projet flow) passe pour "libre" a tort.
+    server.listen(port)
   })
 }
 
@@ -162,25 +167,15 @@ async function main() {
   const existingContent = existsSync(ENV_LOCAL) ? readFileSync(ENV_LOCAL, 'utf-8') : ''
   const existing = parseEnv(existingContent)
 
-  const isWorktree = getMainRepoRoot() !== null
-
-  let frontendPort: number
-  let backendPort: number
-
-  if (isWorktree) {
-    // Worktree : isoler sur des ports libres pour ne pas entrer en conflit avec
-    // les autres worktrees ou le repo principal.
-    const currentFrontend = parseInt(existing.FRONTEND_PORT ?? '0', 10) || 0
-    const currentBackend = parseInt(existing.BACKEND_PORT ?? '0', 10) || 0
-    frontendPort = await pickPort(currentFrontend, FRONTEND_DEFAULT, new Set([currentBackend]))
-    backendPort = await pickPort(currentBackend, BACKEND_DEFAULT, new Set([frontendPort]))
-  } else {
-    // Repo principal : toujours utiliser les ports de base, sans scanner.
-    // Plusieurs sessions Claude Code sur le repo principal partagent ces ports
-    // (une seule fait tourner le dev server a la fois).
-    frontendPort = FRONTEND_DEFAULT
-    backendPort = BACKEND_DEFAULT
-  }
+  // Assigner des ports dev libres, persistes dans .env.local (donc stables entre
+  // sessions : pickPort reutilise le port courant s'il est encore libre, sinon en
+  // cherche un autre a partir des bases). Vaut pour le checkout principal comme pour
+  // les worktrees, pour que plusieurs PROJETS/worktrees coexistent sans collision
+  // (ex. insula sur 3000/5173, negroni sur 3001/5174).
+  const currentFrontend = parseInt(existing.FRONTEND_PORT ?? '0', 10) || 0
+  const currentBackend = parseInt(existing.BACKEND_PORT ?? '0', 10) || 0
+  const frontendPort = await pickPort(currentFrontend, FRONTEND_DEFAULT, new Set([currentBackend]))
+  const backendPort = await pickPort(currentBackend, BACKEND_DEFAULT, new Set([frontendPort]))
 
   const updates: Record<string, string> = {
     FRONTEND_PORT: String(frontendPort),
