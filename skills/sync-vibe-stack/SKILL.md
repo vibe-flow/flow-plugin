@@ -240,4 +240,4 @@ Une fois l'utilisateur satisfait :
 3. NE PAS push.
 
 4. Si on est sur une branche `sync/`, indiquer :
-   > Sync commité sur `sync/vibe-stack-vX.Y.Z`. Pour merger : `git checkout develop && git merge sync/vibe-stack-vX.Y.Z`
+   > Sync commité sur `sync/vibe-stack-vX.Y.Z`. Pour merger : `git checkout main && git merge sync/vibe-stack-vX.Y.Z`

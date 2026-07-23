@@ -126,16 +126,14 @@ bunx prisma migrate dev --name init
 bunx prisma db seed
 ```
 
-### 11. Creer la branche develop
+### 11. Commit d'initialisation
 
-> **Note** : Le template inclut un hook pre-commit qui interdit les commits directs sur `main` et `develop`. Utiliser `--no-verify` pour le commit d'initialisation.
+> **Modèle trunk-based** : `main` est la seule branche longue, commit direct autorisé. Pas de branche `develop`.
 
 ```bash
 git add -A
-git commit --no-verify -m "chore: init project <project-name> from vibe-stack template"
+git commit -m "chore: init project <project-name> from vibe-stack template"
 git push
-git checkout -b develop
-git push -u origin develop
 ```
 
 ### 12. Verification finale
@@ -143,7 +141,6 @@ git push -u origin develop
 - [ ] `bun run dev` demarre sans erreur
 - [ ] Aucune reference a `template-dev` restante : `grep -r "template-dev" --include="*.ts" --include="*.tsx" --include="*.json" .`
 - [ ] `.flow/project.json` contient le bon nom
-- [ ] La branche `develop` existe et est pushee
 
 ## Erreurs courantes
 
@@ -153,4 +150,3 @@ git push -u origin develop
 | Template non trouve | Verifier le nom du repo template et les permissions |
 | Prisma migrate echoue | Verifier que PostgreSQL tourne dans local-services |
 | Imports casses apres renommage | Verifier `bun.lock` supprime et relancer `bun install` |
-| Hook pre-commit bloque le commit | Utiliser `--no-verify` pour le commit d'init (hook interdit commits sur main/develop) |

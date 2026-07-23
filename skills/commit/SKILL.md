@@ -25,7 +25,7 @@ Avant toute chose, determiner la structure git du repertoire courant :
 Apres detection du repo, verifier si la branche courante est protegee :
 
 1. Recuperer la branche courante : `git branch --show-current`
-2. Si la branche est `main`, `master` ou `develop` :
+2. Si la branche est `main` ou `master` :
    - Creer une branche temporaire : `git checkout -b quick/<scope-ou-description>`
    - Le nom est derive du scope principal des changements detectes (ex: `quick/fix-typo`, `quick/config-update`)
    - Informer l'utilisateur : "Branche protegee detectee, creation de `quick/xxx` pour les commits."
@@ -136,7 +136,7 @@ Pour chaque commit valide, dans l'ordre :
 
 Si une branche temporaire a ete creee a l'etape 0b :
 
-1. Revenir sur la branche d'origine : `git checkout develop` (ou `main`)
+1. Revenir sur la branche d'origine : `git checkout main`
 2. Merger en fast-forward : `git merge --ff-only quick/xxx`
 3. Supprimer la branche temporaire : `git branch -d quick/xxx`
 4. Si le fast-forward echoue (branche a diverge), informer l'utilisateur et ne PAS forcer
@@ -148,7 +148,7 @@ Si aucune branche temporaire n'a ete creee, passer directement au resume.
 Afficher un resume de tous les commits crees :
 
 ```
-Repo : nom-du-repo (branche: develop)
+Repo : nom-du-repo (branche: main)
   abc1234 feat(api): ajout du systeme de connecteurs
   def5678 chore(prisma): ajout migration connecteurs
   ghi9012 refactor(pennylane): extraction de la logique connecteur
