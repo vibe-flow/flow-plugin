@@ -20,18 +20,6 @@ Avant toute chose, determiner la structure git du repertoire courant :
 3. Si des sous-repos sont trouves, executer les etapes 1 a 5 pour CHAQUE sous-repo independamment, en indiquant clairement dans quel repo on travaille
 4. Si aucun repo git n'est trouve, informer l'utilisateur et arreter
 
-## Etape 0b — Gestion des branches protegees
-
-Apres detection du repo, verifier si la branche courante est protegee :
-
-1. Recuperer la branche courante : `git branch --show-current`
-2. Si la branche est `main` ou `master` :
-   - Creer une branche temporaire : `git checkout -b quick/<scope-ou-description>`
-   - Le nom est derive du scope principal des changements detectes (ex: `quick/fix-typo`, `quick/config-update`)
-   - Informer l'utilisateur : "Branche protegee detectee, creation de `quick/xxx` pour les commits."
-   - Stocker le nom de la branche d'origine pour l'etape 5b
-3. Si la branche n'est PAS protegee, continuer normalement
-
 ## Etape 1 — Analyse du diff
 
 Pour chaque repo git detecte :
@@ -132,18 +120,7 @@ Pour chaque commit valide, dans l'ordre :
 3. Verifier que le commit a reussi (`git log -1 --oneline`)
 4. Si un hook pre-commit echoue : corriger le probleme et creer un NOUVEAU commit (ne JAMAIS `--amend`)
 
-## Etape 5 — Merge et retour sur la branche protegee
-
-Si une branche temporaire a ete creee a l'etape 0b :
-
-1. Revenir sur la branche d'origine : `git checkout main`
-2. Merger en fast-forward : `git merge --ff-only quick/xxx`
-3. Supprimer la branche temporaire : `git branch -d quick/xxx`
-4. Si le fast-forward echoue (branche a diverge), informer l'utilisateur et ne PAS forcer
-
-Si aucune branche temporaire n'a ete creee, passer directement au resume.
-
-## Etape 6 — Resume final
+## Etape 5 — Resume final
 
 Afficher un resume de tous les commits crees :
 
@@ -152,11 +129,6 @@ Repo : nom-du-repo (branche: main)
   abc1234 feat(api): ajout du systeme de connecteurs
   def5678 chore(prisma): ajout migration connecteurs
   ghi9012 refactor(pennylane): extraction de la logique connecteur
-```
-
-Si une branche temporaire a ete utilisee, l'indiquer dans le resume :
-```
-Branche temporaire quick/xxx creee, mergee en fast-forward et supprimee.
 ```
 
 Si plusieurs repos ont ete traites, afficher le resume pour chacun.
