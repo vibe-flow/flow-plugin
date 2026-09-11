@@ -1,0 +1,72 @@
+# {SERVICE} — deploiement Kamal v2 sur le serveur flow.
+#
+# Ecrit par /vibe-stack:deploy a la premiere mise en ligne, puis edite a la main :
+# ce fichier appartient au projet et n'est jamais synchronise depuis flow-core.
+# bin/deploy y lit le service, l'image API et l'hote — rien n'est a recopier ailleurs.
+service: {SERVICE}
+
+image: {SERVICE}-web
+
+servers:
+  web:
+    hosts:
+      - {HOST}
+    options:
+      network: server-infra
+
+ssh:
+  user: debian
+
+# Les deux reglages nginx qui distinguent ce projet d'un autre. Le template de
+# flow-core les substitue au demarrage du conteneur ; on ne redefinit ici que ce
+# qui differe des defauts de l'image.
+env:
+  clear:
+    API_UPSTREAM: {SERVICE}-api:3000
+    CLIENT_MAX_BODY_SIZE: 50M
+
+proxy:
+  ssl: true
+  hosts:
+{HOSTS}
+  app_port: 80
+  healthcheck:
+    path: /health
+    interval: 5
+    timeout: 30
+
+registry:
+  server: registry.fbrotte.fr
+  username:
+    - REGISTRY_USER
+  password:
+    - KAMAL_REGISTRY_PASSWORD
+
+builder:
+  arch: amd64
+  # Build sur le serveur amd64 natif : evite QEMU, et le segfault de Bun sous emulation.
+  remote: ssh://debian@{HOST}
+  context: .
+  dockerfile: Dockerfile.web
+  provenance: false
+  sbom: false
+
+# --- BLOC API : a retirer pour un projet sans API ---
+accessories:
+  api:
+    image: registry.fbrotte.fr/{SERVICE}-api:latest
+    host: {HOST}
+    options:
+      network: server-infra
+      hostname: {SERVICE}-api
+    env:
+      clear:
+        NODE_ENV: production
+        BACKEND_PORT: "3000"
+        LOG_LEVEL: info
+        FRONTEND_URL: https://{PRIMARY_HOST}
+      secret:
+        - DATABASE_URL
+        - REDIS_URL
+        - JWT_SECRET
+        - JWT_REFRESH_SECRET

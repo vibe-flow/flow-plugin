@@ -1,170 +1,184 @@
 ---
 name: deploy
-description: Déploie le projet via Kamal — soit en déclenchant le workflow GitHub Actions (push main / tag v*), soit en exécutant kamal deploy directement depuis le local. Wrapper léger autour de Kamal v2.
-argument-hint: "[--local] [--skip-fixes] [--dry-run]"
+description: Met en ligne un projet flow sur le serveur flow via Kamal. À la première mise en ligne, pose les quelques questions qui manquent et écrit config/deploy.yml et .kamal/secrets ; ensuite, et à chaque fois, délègue tout le travail à bin/deploy. Utiliser pour déployer, mettre en prod, publier une version d'un projet flow.
+argument-hint: "[--api-only|--web-only|--redeploy] [--allow-dirty] [--check]"
 disable-model-invocation: true
 ---
 
 # Deploy
 
-Déclenche un déploiement Kamal pour le projet courant.
+Un seul point d'entrée pour mettre un projet flow en ligne.
 
-> **Deux modes** :
-> - **CI (défaut)** : commit + push → le workflow `.github/workflows/deploy.yml` fait `kamal deploy` en CI. Logs unifiés sur GitHub, traçabilité.
-> - **Local (`--local`)** : `kamal deploy` exécuté depuis ta machine. Plus rapide pour debug, moins traçable.
+> **Ce skill ne sait pas déployer — `bin/deploy` le sait.** Le script vient de flow-core,
+> il est identique dans tous les projets et enchaîne build de l'API, migrations, garde-fou
+> post-migration, `kamal deploy` et redémarrage. Le skill vérifie seulement que le projet a de
+> quoi déployer, comble ce qui manque la première fois, puis appelle le script.
+>
+> Ne jamais lancer `kamal deploy` directement : il ne fait que la partie web, et laisserait
+> l'API sur l'ancienne version sans prévenir.
 
 ## Dynamic context
 
-- Branche : !`git branch --show-current`
+- Projet : !`jq -r '.id // "NOT_FOUND"' .flow/project.json 2>/dev/null || echo NOT_FOUND`
+- Plomberie flow-core : !`for f in bin/deploy Dockerfile.web infrastructure/nginx/nginx.conf.template .kamal/hooks/pre-deploy; do test -e "$f" || printf "MANQUE:%s " "$f"; done; echo`
 - config/deploy.yml : !`test -f config/deploy.yml && echo EXISTS || echo NOT_FOUND`
-- Workflow GHA : !`test -f .github/workflows/deploy.yml && echo EXISTS || echo NOT_FOUND`
-- Working tree : !`git status --porcelain | wc -l | tr -d ' '` modifications non-commitées
-- Service name (config/deploy.yml) : !`grep -E '^service:' config/deploy.yml 2>/dev/null | head -1 | awk '{print $2}' || echo UNKNOWN`
-- Primary host (config/deploy.yml) : !`grep -E '^\s*-\s+' config/deploy.yml 2>/dev/null | head -1 | sed 's/^[[:space:]]*-[[:space:]]*//' || echo UNKNOWN`
+- .kamal/secrets : !`test -f .kamal/secrets && echo EXISTS || echo NOT_FOUND`
+- Projets Bitwarden : !`jq -c '.bws // "AUCUN"' .flow/project.json 2>/dev/null || echo AUCUN`
+- API dans le projet : !`test -d apps/api && echo OUI || echo NON`
+- Branche : !`git branch --show-current`
+- Arbre de travail : !`git status --porcelain | wc -l | tr -d ' '` fichier(s) modifié(s) ou non suivi(s)
 
-## Step 0 — Pré-requis
+## Step 0 — La plomberie est-elle là ?
 
-Si `config/deploy.yml` est NOT_FOUND : invoquer `/deploy-setup` puis revenir sur ce skill. Demander confirmation via `AskUserQuestion` ("Le projet n'a pas de config Kamal. Lancer /deploy-setup maintenant ?").
+Si la ligne « Plomberie flow-core » signale un fichier manquant : **ne rien générer**. Ces
+fichiers appartiennent à flow-core ; en écrire une copie dans le projet recréerait exactement la
+divergence qu'on a supprimée. Le projet n'est pas synchronisé :
 
-Si workflow GHA NOT_FOUND et qu'on est en mode CI : forcer le mode local (`--local`) ou demander à l'utilisateur.
+> Il manque la plomberie de déploiement de flow-core. Lance `/vibe-stack:sync-vibe-stack` —
+> et si la synchro répond « à jour », c'est qu'aucune release de flow-core ne contient encore
+> ces fichiers : il faut d'abord en publier une (`/vibe-stack:release-vibe-stack`).
 
-## Step 1 — Détecter le mode
+Arrêter là.
 
-- Si `$ARGUMENTS` contient `--local` → mode **local**.
-- Sinon → mode **CI** par défaut.
+Si `$ARGUMENTS` contient `--check` : afficher l'état (Dynamic context + Step 4 sans déployer) et arrêter.
 
-## Step 2 — Vérifier l'état local
+## Step 1 — Première mise en ligne ?
 
-1. **Branche** : si on n'est pas sur `main` ni sur une branche `feature/*` `fix/*` `hotfix/*`, demander confirmation.
+- `config/deploy.yml` **existe** → aller au Step 3.
+- Sinon → Step 2, une seule fois dans la vie du projet.
 
-2. **Working tree** : si modifications non-commitées :
-   - Lister les fichiers modifiés
-   - `AskUserQuestion` :
-     - Commit via `/commit` puis continuer
-     - Continuer sans commit (les modifs ne seront pas déployées)
-     - Annuler
+## Step 2 — Préparer la première mise en ligne
 
-3. **Sync avec origin** : `git fetch && git status -sb`. Si en retard, proposer `git pull --ff-only`.
+### 2.1 Déduire, sans demander
 
-## Step 3 — Mode CI : push pour déclencher le workflow
+| Valeur | D'où |
+|---|---|
+| Service | `id` de `.flow/project.json` |
+| Hôte | nom MagicDNS du serveur : `tailscale status --json \| jq -r '.Peer[] \| select(.HostName=="flow") \| .DNSName \| rtrimstr(".")'` — **jamais une IP** : le port 22 n'est ouvert qu'au tailnet, et une IP recopiée se périme |
+| Utilisateur SSH | `debian` |
+| Registry | `registry.fbrotte.fr` |
+| Réseau Docker | `server-infra` |
+| Accessory API | oui si `apps/api/` existe |
+| Taille de corps nginx | `50M` — le projet l'ajustera dans `deploy.yml` s'il le faut |
+
+### 2.2 Demander, via `AskUserQuestion`, seulement ce qui ne se déduit pas
+
+1. **Le ou les domaines.** Proposer `<service>.senpli.fr` en premier — tout ce qui est pro va
+   sur `senpli.fr`, couvert par un DNS wildcard.
+2. **Confirmer le nom du service** déduit (il nomme les conteneurs, les images et la base).
+
+### 2.3 Projets Bitwarden
+
+Lire le bloc `bws` de `.flow/project.json`.
+
+- **`shared_project_id` manquant** : c'est le projet qui contient `REGISTRY_USER`. Le retrouver en
+  listant les **noms** de clés de chaque projet — `bws secret list <id> | jq -r '.[].key'`, jamais
+  les valeurs.
+- **API présente et `project_id` manquant** : proposer de créer le projet
+  (`bws project create <service>`), puis y créer `DATABASE_URL`, `REDIS_URL`, `JWT_SECRET`,
+  `JWT_REFRESH_SECRET` (`bws secret create <CLE> "<valeur>" <project_id>`). Générer les secrets JWT
+  avec `openssl rand -hex 32`. `DATABASE_URL` pointe sur `server-postgres:5432/<base>`.
+- Écrire les UUID dans `.flow/project.json` (`bws.project_id`, `bws.shared_project_id`).
+
+**Aucune valeur de secret ne doit apparaître dans une sortie** : pas d'`echo`, pas de
+`bws secret get` affiché, et jamais `bash -x` sur un script qui manipule des secrets — la trace
+imprime les valeurs en clair.
+
+### 2.4 Base de données (si API)
+
+Nom de la base : le service, tirets remplacés par des underscores.
 
 ```bash
-git push origin <current-branch>
+ssh flow "docker exec server-postgres psql -U postgres -Atc \"select 1 from pg_database where datname='<base>'\""
 ```
 
-Si la branche n'est PAS `main` : informer l'utilisateur que le push **ne déclenchera pas** le workflow (qui n'écoute que `main` + tags `v*`). Suggérer de créer une PR + merger, ou d'utiliser `--local`.
+Si vide, après confirmation :
 
-Si push sur `main` :
+```bash
+ssh flow "docker exec server-postgres psql -U postgres -c 'CREATE DATABASE <base>' && docker exec server-postgres psql -U postgres -d <base> -c 'CREATE EXTENSION IF NOT EXISTS vector'"
+```
 
-1. **Wait for workflow run to appear** (jusqu'à 30s) :
+### 2.5 Écrire la config
+
+- `config/deploy.yml` depuis `templates/deploy.yml.template` (dossier de ce skill). Pour un
+  projet sans API, retirer le bloc `accessories` marqué dans le gabarit.
+- `.kamal/secrets` depuis `templates/secrets.template`, même règle pour le bloc API.
+- `.kamal/secrets` est **versionné** : il ne contient aucune valeur, seulement où les chercher.
+
+Ces deux fichiers appartiennent au projet — ils ne viennent pas de flow-core et ne sont jamais
+synchronisés.
+
+### 2.6 DNS
+
+Un sous-domaine de `senpli.fr` est déjà couvert par le wildcard. Pour tout autre domaine, vérifier
+que `dig +short <domaine>` renvoie la même IP que `dig +short x.senpli.fr` ; sinon, indiquer
+l'enregistrement A à créer et attendre avant de déployer (sans DNS, Let's Encrypt échoue).
+
+### 2.7 Committer
+
+`bin/deploy` refuse un arbre de travail sale. Committer **nommément** ce que ce step a produit
+(`config/deploy.yml`, `.kamal/secrets`, `.flow/project.json`) — jamais `git add -A`.
+
+## Step 3 — Déployer
+
+1. **Arbre de travail sale** : lister les fichiers. Ne jamais committer à la place de l'utilisateur
+   des fichiers qu'il n'a pas demandé à publier. Proposer : committer ce qui doit partir, ou
+   `--allow-dirty` en disant explicitement ce qui part avec, ou un worktree sur un commit précis.
+2. **Confirmer** via `AskUserQuestion` : service, commit, domaines, mode.
+3. **Appeler le script**, en transmettant les options reçues :
+
    ```bash
-   gh run list --workflow=deploy.yml --branch=main --limit=1
+   bin/deploy [--api-only|--web-only|--redeploy] [--allow-dirty]
    ```
 
-2. **Monitor** :
-   ```bash
-   gh run watch <run-id>
-   ```
+   Le script force lui-même la locale UTF-8, lit ses valeurs dans `config/deploy.yml`, et
+   s'arrête si une migration n'est pas appliquée : **lire sa sortie** plutôt que la survoler.
 
-3. **Si échec** :
-   - `gh run view <run-id> --log-failed`
-   - Proposer : voir les logs détaillés, `kamal rollback`, ou debug local.
+4. **Premier déploiement** : si le script échoue parce que l'accessory API n'existe pas encore sur
+   le serveur, lancer `kamal accessory boot api`, puis relancer `bin/deploy`.
 
-## Step 3-bis — Mode local : `kamal deploy` direct
-
-Vérifier que toutes les env vars secrets sont set localement (lecture de `.kamal/secrets` pour la liste) :
-```bash
-test -f .kamal/secrets && grep -oE '^\w+' .kamal/secrets
-```
-
-Pour chaque variable manquante, demander via `AskUserQuestion` ou refuser de continuer.
-
-Lancer Kamal via Docker (Ruby local pas requis) :
-```bash
-docker run --rm \
-  -v "$(pwd):/workdir" \
-  -v "$HOME/.ssh:/root/.ssh" \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  -e KAMAL_REGISTRY_PASSWORD \
-  -e DATABASE_URL -e REDIS_URL -e JWT_SECRET -e JWT_REFRESH_SECRET \
-  $(grep -oE '^\w+' .kamal/secrets | grep -v KAMAL_REGISTRY_PASSWORD | sed 's/^/-e /') \
-  ghcr.io/basecamp/kamal:latest deploy
-```
-
-> **Note** : si c'est le PREMIER deploy sur ce serveur, utiliser `setup` au lieu de `deploy` (bootstrap kamal-proxy + accessories).
-
-Si `--dry-run` : afficher la commande sans l'exécuter, et lancer `kamal config` à la place pour valider le YAML.
-
-## Step 4 — Health check
-
-Récupérer le primary host depuis `config/deploy.yml` :
-```bash
-PRIMARY_HOST=$(grep -A5 '^proxy:' config/deploy.yml | grep -E '^\s*-\s+' | head -1 | sed 's/^[[:space:]]*-[[:space:]]*//')
-
-# Polling avec retry (le SSL Let's Encrypt peut prendre 30s-2min au premier deploy)
-for i in 1 2 3 4 5 6; do
-  if curl -sf --max-time 10 "https://$PRIMARY_HOST/health" >/dev/null; then
-    echo "✓ Health check OK"
-    break
-  fi
-  echo "Attempt $i — waiting 10s..."
-  sleep 10
-done
-```
-
-Si toujours KO après 6 tentatives :
-- `docker run ... kamal app logs --lines 50`
-- Proposer `kamal rollback` ou debug.
-
-## Step 4-bis — Vérifier l'image déployée correspond au commit
+## Step 4 — Vérifier
 
 ```bash
-EXPECTED=$(git rev-parse HEAD)
-ssh {SSH_USER}@{SSH_HOST} "docker inspect <SERVICE>-web-${EXPECTED:0:40} --format '{{.Config.Image}}'"
+DOMAIN=$(ruby -ryaml -e 'puts YAML.safe_load(File.read("config/deploy.yml"))["proxy"]["hosts"].first')
+curl -s -o /dev/null -w '%{http_code}\n' "https://$DOMAIN/health"
+curl -s -o /dev/null -w '%{http_code}\n' "https://$DOMAIN/api/health"   # si API
 ```
 
-Confirmer que le container actif est bien celui du commit poussé.
+Au premier déploiement, le certificat Let's Encrypt peut prendre une à deux minutes : réessayer
+avant de conclure à un échec.
 
-## Step 5 — Fix scripts (si applicable, à l'ancienne)
-
-Si `.flow/deploy.json` legacy contient une section `fixes`, garder la logique existante : SSH au serveur, lister les scripts dans `scripts/fixes/`, dry-run puis apply, update tracking file.
-
-Sauter complètement si `$ARGUMENTS` contient `--skip-fixes`.
-
-## Step 6 — Résumé
+## Step 5 — Résumé
 
 ```
 Deploy — terminé
 ────────────────
-Service :       {SERVICE_NAME}
-Commit :        {HASH} - {MESSAGE}
-Mode :          CI (workflow {RUN_ID}) | local (kamal deploy)
-Workflow :      passed / failed
-Health :        OK / FAIL
-Primary URL :   https://{PRIMARY_HOST}
+Service :  <service>
+Commit :   <hash> — <message>
+Mode :     complet | api | web | redeploy
+Santé :    web <code> · api <code>
+URL :      https://<domaine>
 ```
 
-## Rollback
+**Revenir en arrière** — le web : `kamal app containers` pour lister les versions, puis
+`kamal rollback <version>`. L'API n'a pas de rollback Kamal : redéployer le commit précédent
+depuis un worktree (`git worktree add .worktrees/deploy <commit> --detach`).
 
-Si le deploy a réussi mais l'app montre des erreurs en prod :
-```bash
-docker run --rm -v "$(pwd):/workdir" -v "$HOME/.ssh:/root/.ssh" \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  ghcr.io/basecamp/kamal:latest rollback
-```
+## Règles
 
-Kamal rollback connaît la version précédente automatiquement. Bascule en quelques secondes (zero-downtime).
-
-## Règles importantes
-
-- **TOUJOURS** utiliser `AskUserQuestion` avant un push ou un `kamal deploy` direct.
-- **NE JAMAIS** force-push (`--force`) sur `main`.
-- Si la branche courante n'est pas `main`, le mode CI **ne déploie pas** (le workflow écoute `main` + `v*` only). Avertir clairement.
-- Pour déployer une **version spécifique** (release tag-based), utiliser `/release` à la place (qui crée le tag → déclenche le workflow prod).
-- Le mode `--local` est utile pour debug, mais perd la traçabilité GitHub Actions. À utiliser avec parcimonie.
+- **Toujours passer par `bin/deploy`**, jamais `kamal deploy` seul.
+- **Ne jamais modifier dans un projet** `bin/deploy`, les Dockerfiles, `nginx.conf.template` ni
+  les hooks Kamal : ils viennent de flow-core. Un réglage qui diffère → variable dans
+  `env.clear` de `deploy.yml`. Une route en plus → fichier dans `infrastructure/nginx/extra/`.
+  Un besoin commun → corriger dans flow-core, publier une release, synchroniser.
+- **Pas de déploiement par la CI.** Le workflow `docker-build.yml` de flow-core vérifie que les
+  images se construisent et démarrent ; il ne déploie pas.
+- Le serveur se désigne par son **nom MagicDNS**, jamais par une IP.
 
 ## Arguments
 
-- `--local` : skip CI, lance `kamal deploy` directement depuis la machine locale.
-- `--skip-fixes` : ne pas exécuter les scripts dans `scripts/fixes/` (legacy `.flow/deploy.json`).
-- `--dry-run` : afficher ce qui serait fait sans rien exécuter.
+- `--api-only` : image API, migrations et redémarrage de l'API seulement
+- `--web-only` : le front seulement
+- `--redeploy` : redémarrage sans rebuild
+- `--allow-dirty` : déployer malgré des fichiers non commités — dire lesquels
+- `--check` : état du projet, sans déployer

@@ -20,7 +20,7 @@ claude plugin install vibe-stack@vibe-stack
 |-------|-------------|
 | `sync-vibe-stack` | Synchronise le code template vibe-stack dans un projet existant. |
 
-> Plus de skills à venir : `import-module`, `export-module`, `deploy`, `deploy-setup`, `release`, `init-project`, etc.
+> Plus de skills à venir : `import-module`, `export-module`, `deploy`, `release`, `init-project`, etc.
 
 ## Mise à jour
 

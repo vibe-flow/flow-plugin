@@ -20,8 +20,7 @@ Plugin Claude Code packageant l'écosystème de développement **vibe-stack** : 
 
 ### Déploiement
 
-- **`vibe-stack:deploy-setup`** — Scaffold de l'infrastructure de déploiement (Dockerfiles, workflows, Caddy).
-- **`vibe-stack:deploy`** — Déployer le projet en production (commit, push, monitor GitHub Actions, vérif santé serveur).
+- **`vibe-stack:deploy`** — Mettre un projet en ligne : prépare la config à la première mise en ligne, puis délègue tout à `bin/deploy`.
 - **`vibe-stack:release`** — Diff dev/prod, merge vers prod et déploiement.
 - **`vibe-stack:hotfix`** — Cherry-pick d'un commit vers la branche de production et déploiement.
 
