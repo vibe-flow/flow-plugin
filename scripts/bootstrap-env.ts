@@ -24,6 +24,12 @@
 // .env.local (et .claude/launch.json), que plus rien ne vient bouger.
 //
 // Detection projet : early exit si .flow/project.json absent (= pas un projet Vibe Stack).
+//
+// Early exit aussi si le projet a bin/dev : il compose son environnement a chaque
+// lancement (.flow/project.json + projet BSM), sans aucun fichier .env. Ecrire un
+// .env ici y serait non seulement inutile mais trompeur : DATABASE_URL pointerait
+// sur une base `app` commune a tous les projets. Ce hook ne sert plus qu'aux
+// projets anterieurs a bin/dev.
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
@@ -55,8 +61,8 @@ const DEV_DEFAULTS: Record<string, string | (() => string)> = {
   // .env.local pour ces cles) -> l'API ecouterait sur le mauvais port.
 }
 
-if (!existsSync(FLOW_MARKER)) {
-  // Pas un projet Vibe Stack -> on ne touche a rien
+if (!existsSync(FLOW_MARKER) || existsSync(join(PROJECT_ROOT, 'bin/dev'))) {
+  // Pas un projet Vibe Stack, ou projet sans .env (bin/dev) -> on ne touche a rien
   process.exit(0)
 }
 

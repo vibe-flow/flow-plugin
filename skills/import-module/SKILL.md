@@ -92,7 +92,7 @@ Before copying, understand the target project:
 2. **Existing conventions**: import style, path aliases, naming
 3. **Prisma schema**: check existing models to avoid conflicts
 4. **Existing dependencies**: check `package.json` to avoid duplicates
-5. **Port/env config**: check `.env.example` for existing variables
+5. **Env config**: check `.flow/project.json` (`dev` key, read by `bin/dev`) and the project's BSM secrets (`bws secret list <bws.project_id> | jq -r '.[].key'`) — projects have no `.env*` file
 
 ## Step 3 — Copy & Adapt Files
 
@@ -241,7 +241,7 @@ Module commit: <hash> (<date>)
 Tests: 3 tests passing
 
 Remaining manual steps (if any):
-  - Add MAGIC_LINK_EXPIRY_MINUTES to .env
+  - Add MAGIC_LINK_EXPIRY_MINUTES (config: default in code; secret: BSM + .kamal/secrets)
   - Wire into your auth service (see module README step 7)
 ```
 
